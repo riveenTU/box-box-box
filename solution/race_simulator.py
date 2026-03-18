@@ -16,7 +16,7 @@ TIRE_DEG = {
     "HARD": (0.05, 1.2)
 }
 
-FRESH_TIRE_BONUS = -0.3  # small boost on new tires
+FRESH_TIRE_BONUS = -0.15  # small boost on new tires
 
 
 # Lap time model
@@ -26,31 +26,31 @@ def compute_lap_time(base, tire, tire_age, temp):
 
     # Piecewise degradation (CRITICAL)
     if tire == "SOFT":
-        if tire_age <= 8:
-            deg = 0.05 * tire_age
-        elif tire_age <= 15:
-            deg = 0.05 * 8 + 0.25 * (tire_age - 8)
+        if tire_age <= 10:
+            deg = 0.04 * tire_age
+        elif tire_age <= 18:
+            deg = 0.04 * 10 + 0.18 * (tire_age - 10)
         else:
-            deg = 0.05 * 8 + 0.25 * 7 + 0.6 * (tire_age - 15)
+            deg = 0.04 * 10 + 0.18 * 8 + 0.4 * (tire_age - 18)
 
     elif tire == "MEDIUM":
-        if tire_age <= 12:
-            deg = 0.04 * tire_age
-        elif tire_age <= 25:
-            deg = 0.04 * 12 + 0.12 * (tire_age - 12)
+        if tire_age <= 15:
+            deg = 0.035 * tire_age
+        elif tire_age <= 30:
+            deg = 0.035 * 15 + 0.10 * (tire_age - 15)
         else:
-            deg = 0.04 * 12 + 0.12 * 13 + 0.3 * (tire_age - 25)
+            deg = 0.035 * 15 + 0.10 * 15 + 0.25 * (tire_age - 30)
 
     elif tire == "HARD":
-        if tire_age <= 20:
-            deg = 0.03 * tire_age
-        elif tire_age <= 40:
-            deg = 0.03 * 20 + 0.08 * (tire_age - 20)
+        if tire_age <= 25:
+            deg = 0.025 * tire_age
+        elif tire_age <= 45:
+            deg = 0.025 * 25 + 0.06 * (tire_age - 25)
         else:
-            deg = 0.03 * 20 + 0.08 * 20 + 0.2 * (tire_age - 40)
+            deg = 0.025 * 25 + 0.06 * 20 + 0.15 * (tire_age - 45)
 
     # Temperature effect
-    temp_factor = 1 + 0.015 * (temp - 25)
+    temp_factor = 1 + 0.008 * (temp - 25)
 
     lap_time = base + offset + deg * temp_factor
 
@@ -59,6 +59,37 @@ def compute_lap_time(base, tire, tire_age, temp):
         lap_time += FRESH_TIRE_BONUS
 
     return lap_time
+
+
+def strategy_score(driver, total_laps):
+    tire = driver["initial_tire"]
+    pits = driver["pit_stops"]
+
+    stints = []
+    prev = 0
+    current = tire
+
+    for pit in pits:
+        stints.append((current, pit["lap"] - prev))
+        current = pit["to_tire"]
+        prev = pit["lap"]
+
+    stints.append((current, total_laps - prev))
+
+    soft = sum(l for t, l in stints if t == "SOFT")
+    medium = sum(l for t, l in stints if t == "MEDIUM")
+    hard = sum(l for t, l in stints if t == "HARD")
+    stops = len(stints) - 1
+
+    # from the ML model
+    score = (
+        0.165 * soft
+        - 0.043 * medium
+        - 0.139 * hard
+        - 2.36 * stops
+    )
+
+    return score
 
 
 # Race simulation
@@ -78,8 +109,10 @@ def simulate_race(test_case):
     for pos, strat in strategies.items():
         drivers[strat["driver_id"]] = {
             "tire": strat["starting_tire"],
+            "initial_tire": strat["starting_tire"], 
             "tire_age": 0,
             "pit_map": {pit["lap"]: pit for pit in strat["pit_stops"]},
+            "pit_stops": strat["pit_stops"], 
             "time": 0
         }
 
@@ -101,8 +134,14 @@ def simulate_race(test_case):
                 d["tire"] = pit["to_tire"]
                 d["tire_age"] = 0 # reset age on new tires
 
+    for d in drivers.values():
+        d["score"] = strategy_score(d, total_laps)
+
     # sort by total time
-    sorted_drivers = sorted(drivers.items(), key=lambda x: x[1]["time"])
+    sorted_drivers = sorted(
+        drivers.items(),
+        key=lambda x: x[1]["time"] + 0.1 * x[1]["score"]
+    )
 
     finishing_order = [driver_id for driver_id, _ in sorted_drivers]
 
